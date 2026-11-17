@@ -1,5 +1,22 @@
 use std::path::PathBuf;
 
+/// Optional `COMAIL_PROFILE` (ASCII letters, digits, `-`, `_`): runs a
+/// separate install side by side, e.g. a dev build next to the released app.
+/// It namespaces the data dir and the keyring service as `comail-<profile>`.
+/// Unset or invalid means the default `comail`.
+pub fn namespace() -> String {
+    match std::env::var("COMAIL_PROFILE") {
+        Ok(p)
+            if !p.is_empty()
+                && p.len() <= 32
+                && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') =>
+        {
+            format!("comail-{p}")
+        }
+        _ => "comail".to_string(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub data_dir: PathBuf,
@@ -9,7 +26,7 @@ impl Paths {
     pub fn default_dirs() -> Self {
         let data_dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("comail");
+            .join(namespace());
         Paths { data_dir }
     }
 

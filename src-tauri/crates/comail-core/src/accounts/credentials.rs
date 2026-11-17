@@ -3,7 +3,9 @@
 
 use crate::error::{CoreError, Result};
 
-const SERVICE: &str = "comail";
+fn service() -> String {
+    crate::config::namespace()
+}
 
 pub enum Slot {
     Password,
@@ -42,7 +44,7 @@ impl Slot {
 
 fn entry(account_id: i64, slot: &Slot) -> Result<keyring::Entry> {
     let user = format!("{account_id}:{}", slot.as_str());
-    keyring::Entry::new(SERVICE, &user).map_err(Into::into)
+    keyring::Entry::new(&service(), &user).map_err(Into::into)
 }
 
 // Windows Credential Manager caps a credential blob at 2560 bytes
@@ -65,7 +67,7 @@ const MAX_CHUNKS: usize = 256;
 
 fn chunk_entry(account_id: i64, slot: &Slot, index: usize) -> Result<keyring::Entry> {
     let user = format!("{account_id}:{}:c{index}", slot.as_str());
-    keyring::Entry::new(SERVICE, &user).map_err(Into::into)
+    keyring::Entry::new(&service(), &user).map_err(Into::into)
 }
 
 /// Split on char boundaries so no chunk exceeds `max_units` UTF-16 code units
