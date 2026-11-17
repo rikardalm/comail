@@ -9,7 +9,8 @@ pub fn namespace() -> String {
         Ok(p)
             if !p.is_empty()
                 && p.len() <= 32
-                && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') =>
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') =>
         {
             format!("comail-{p}")
         }
