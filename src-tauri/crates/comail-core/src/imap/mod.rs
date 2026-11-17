@@ -405,8 +405,13 @@ async fn fetch_headers_inner(
         .filter(|item| *item != "EMAILID")
         .collect::<Vec<_>>()
         .join(" ");
-    let query =
-        format!("(UID FLAGS INTERNALDATE RFC822.SIZE BODYSTRUCTURE {extra} {HEADER_FIELDS})");
+    // Single-space separated: Exchange returns no FETCH data for a query with
+    // a double space (empty `extra`), so no headers were ever stored.
+    let query = if extra.is_empty() {
+        format!("(UID FLAGS INTERNALDATE RFC822.SIZE BODYSTRUCTURE {HEADER_FIELDS})")
+    } else {
+        format!("(UID FLAGS INTERNALDATE RFC822.SIZE BODYSTRUCTURE {extra} {HEADER_FIELDS})")
+    };
     let mut out = Vec::new();
     {
         let mut stream = session
