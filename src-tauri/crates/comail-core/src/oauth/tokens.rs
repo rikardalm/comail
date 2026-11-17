@@ -137,6 +137,15 @@ impl TokenProvider {
             ("refresh_token".to_string(), refresh_token),
             ("client_id".to_string(), client_id),
         ];
+        // Microsoft issues single-resource access tokens, and the refresh
+        // token is multi-resource once Graph scopes (Teams, calendar) were
+        // consented at sign-in. Without an explicit scope, the token endpoint
+        // may mint a Graph-audience token, which IMAP/SMTP then reject
+        // ("AUTHENTICATE failed"). Pin the mail resource, as the initial code
+        // redemption in `flow::authorize_with` already does.
+        if provider == Provider::Microsoft {
+            form.push(("scope".to_string(), cfg.scopes.join(" ")));
+        }
         if let Some(cs) = client_secret {
             form.push(("client_secret".to_string(), cs));
         }

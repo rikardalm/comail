@@ -50,6 +50,10 @@ pub async fn sync_account(
         .await?;
     let mut changed_any = pushed;
     let mut new_events: Vec<NewEventInfo> = Vec::new();
+    // First per-calendar failure. Returned as the cycle's error after the
+    // other calendars ran, so the task loop records it in `last_error`
+    // instead of clearing it as a successful cycle.
+    let mut first_error: Option<String> = None;
 
     for cal in calendars.into_iter().filter(|c| c.enabled) {
         match sync_calendar(db, &token, account_id, cal.id, &cal.url).await {
@@ -60,9 +64,7 @@ pub async fn sync_account(
             Err(CoreError::NeedsReauth) => return Err(CoreError::NeedsReauth),
             Err(e) => {
                 tracing::warn!("graph calendar {} sync failed: {e}", cal.id);
-                let msg = e.to_string();
-                db.write(move |conn| repo::caldav::set_config_error(conn, account_id, Some(&msg)))
-                    .await?;
+                first_error.get_or_insert_with(|| e.to_string());
             }
         }
     }
@@ -75,6 +77,9 @@ pub async fn sync_account(
             account_id,
             events: new_events,
         });
+    }
+    if let Some(msg) = first_error {
+        return Err(CoreError::CalDav(msg));
     }
     Ok(changed_any)
 }
