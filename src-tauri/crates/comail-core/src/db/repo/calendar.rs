@@ -473,6 +473,50 @@ pub fn set_series_master(
     Ok(())
 }
 
+/// Graph series masters whose stored occurrences still lack details: the
+/// calendarView delta sends plain occurrences with only times and ids.
+pub fn series_masters_missing_details(conn: &Connection, calendar_id: i64) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT series_master_id FROM calendar_events
+         WHERE calendar_id = ?1 AND series_master_id IS NOT NULL
+           AND summary IS NULL AND dirty = 0 AND deleted = 0",
+    )?;
+    let rows = stmt.query_map(params![calendar_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
+}
+
+/// Copy the series master's details onto its occurrences that have none.
+/// Only fields that are still NULL are filled, so exceptions keep their own.
+pub fn fill_series_details(
+    conn: &Connection,
+    calendar_id: i64,
+    series_master_id: &str,
+    master: &IcsEvent,
+) -> Result<usize> {
+    let n = conn.execute(
+        "UPDATE calendar_events SET
+           summary = ?3,
+           location = COALESCE(location, ?4),
+           organizer = COALESCE(organizer, ?5),
+           description = COALESCE(description, ?6),
+           attendees_json = COALESCE(attendees_json, ?7),
+           join_url = COALESCE(join_url, ?8)
+         WHERE calendar_id = ?1 AND series_master_id = ?2
+           AND summary IS NULL AND dirty = 0 AND deleted = 0",
+        params![
+            calendar_id,
+            series_master_id,
+            master.summary,
+            master.location,
+            master.organizer,
+            master.description,
+            attendees_json(master)?,
+            master.join_url,
+        ],
+    )?;
+    Ok(n)
+}
+
 /// Record our RSVP (ACCEPTED | TENTATIVE | DECLINED).
 pub fn set_rsvp(conn: &Connection, event_id: i64, status: &str) -> Result<()> {
     conn.execute(
@@ -828,6 +872,49 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM calendar_events", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn fill_series_details_names_bare_occurrences_but_keeps_exceptions() {
+        let c = testutil::conn();
+        testutil::seed_account(&c);
+        let cal = seed_calendar(&c);
+
+        // Plain occurrence: Graph delta sends no subject/location.
+        let mut bare = sample_ics_event();
+        bare.uid = "occ-1".into();
+        bare.summary = None;
+        bare.location = None;
+        upsert_remote(&c, 1, cal, "occ-1", "\"e1\"", "", &bare).unwrap();
+        set_series_master(&c, cal, "occ-1", "m1").unwrap();
+        // Exception: has its own subject, which must survive.
+        let mut exc = sample_ics_event();
+        exc.uid = "occ-2".into();
+        exc.summary = Some("Moved standup".into());
+        upsert_remote(&c, 1, cal, "occ-2", "\"e1\"", "", &exc).unwrap();
+        set_series_master(&c, cal, "occ-2", "m1").unwrap();
+
+        assert_eq!(series_masters_missing_details(&c, cal).unwrap(), vec!["m1"]);
+
+        let mut master = sample_ics_event();
+        master.summary = Some("Daily standup".into());
+        master.location = Some("Teams".into());
+        assert_eq!(fill_series_details(&c, cal, "m1", &master).unwrap(), 1);
+
+        let get = |href: &str| -> (Option<String>, Option<String>) {
+            c.query_row(
+                "SELECT summary, location FROM calendar_events WHERE caldav_href = ?1",
+                params![href],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            get("occ-1"),
+            (Some("Daily standup".into()), Some("Teams".into()))
+        );
+        assert_eq!(get("occ-2").0.as_deref(), Some("Moved standup"));
+        assert!(series_masters_missing_details(&c, cal).unwrap().is_empty());
     }
 
     #[test]

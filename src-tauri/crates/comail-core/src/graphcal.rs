@@ -214,6 +214,9 @@ async fn sync_calendar(
 
     let mut restarted = false;
     let mut changed_any = false;
+    // Series masters seen in this pull, by Graph id: their occurrences arrive
+    // without subject/location/etc. and are filled from these afterwards.
+    let mut masters: std::collections::HashMap<String, IcsEvent> = std::collections::HashMap::new();
     let mut new_events: Vec<NewEventInfo> = Vec::new();
     let delta_link: Option<String>;
 
@@ -230,6 +233,11 @@ async fn sync_calendar(
         };
 
         let (removed, upserts): (Vec<_>, Vec<_>) = page.events.into_iter().partition(|e| e.removed);
+        for ev in &upserts {
+            if ev.event_type.as_deref() == Some("seriesMaster") {
+                masters.insert(ev.id.clone(), ics_event(ev));
+            }
+        }
 
         if !upserts.is_empty() {
             changed_any = true;
@@ -291,6 +299,10 @@ async fn sync_calendar(
         }
     }
 
+    if fill_occurrence_details(db, token, calendar_id, masters).await? {
+        changed_any = true;
+    }
+
     if !incremental {
         new_events.clear();
     }
@@ -301,6 +313,45 @@ async fn sync_calendar(
     })
     .await?;
     Ok((changed_any, new_events))
+}
+
+/// Give recurring occurrences their series' subject, location, organizer,
+/// attendees and join link. The delta feed carries those only on the
+/// seriesMaster item; a master not in this pull (incremental sync, or rows
+/// stored before this fix) is fetched by id. Returns true if any row changed.
+async fn fill_occurrence_details(
+    db: &Db,
+    token: &str,
+    calendar_id: i64,
+    mut masters: std::collections::HashMap<String, IcsEvent>,
+) -> Result<bool> {
+    let missing = db
+        .read(move |conn| repo::calendar::series_masters_missing_details(conn, calendar_id))
+        .await?;
+    let mut changed = false;
+    for master_id in missing {
+        let master = match masters.remove(&master_id) {
+            Some(m) => Some(m),
+            None => match graph::get_event(token, &master_id).await {
+                Ok(ev) => ev.map(|e| ics_event(&e)),
+                Err(CoreError::NeedsReauth) => return Err(CoreError::NeedsReauth),
+                Err(e) => {
+                    tracing::warn!(error = %e, "graph: could not fetch series master");
+                    continue;
+                }
+            },
+        };
+        let Some(master) = master.filter(|m| m.summary.is_some()) else {
+            continue;
+        };
+        let n = db
+            .write(move |conn| {
+                repo::calendar::fill_series_details(conn, calendar_id, &master_id, &master)
+            })
+            .await?;
+        changed |= n > 0;
+    }
+    Ok(changed)
 }
 
 /// Map a Graph delta event onto the shared calendar row shape. Occurrences

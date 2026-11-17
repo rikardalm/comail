@@ -212,6 +212,28 @@ pub async fn delete_calendar_event(access_token: &str, event_id: &str) -> Result
     }
 }
 
+/// Fetch one event (e.g. a recurring series master) by id. `Ok(None)` on 404.
+pub async fn get_event(access_token: &str, event_id: &str) -> Result<Option<DeltaEvent>> {
+    let (status, text) = request_raw(
+        reqwest::Method::GET,
+        access_token,
+        &format!("/me/events/{event_id}"),
+        None,
+    )
+    .await?;
+    if status == 404 {
+        return Ok(None);
+    }
+    if !(200..300).contains(&status) {
+        return Err(CoreError::Network(format!(
+            "graph GET event failed ({status}): {text}"
+        )));
+    }
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| CoreError::Other(format!("graph event parse: {e}")))?;
+    Ok(parse_delta_event(&v))
+}
+
 /// One calendar from `GET /me/calendars`.
 pub struct GraphCalendar {
     pub id: String,
