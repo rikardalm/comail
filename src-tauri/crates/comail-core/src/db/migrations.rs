@@ -37,6 +37,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/033_folder_role_repairs.sql"),
     include_str!("migrations/034_stable_identity_attempts.sql"),
     include_str!("migrations/035_restore_non_trash_roles.sql"),
+    include_str!("migrations/036_caldav_microsoft_kind.sql"),
 ];
 
 pub fn run(conn: &mut Connection) -> Result<()> {
@@ -70,6 +71,33 @@ mod tests {
             tx.pragma_update(None, "user_version", target).unwrap();
             tx.commit().unwrap();
         }
+    }
+
+    #[test]
+    fn migration_036_allows_microsoft_caldav_kind_and_keeps_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        run_through(&mut conn, 35);
+        crate::db::testutil::seed_account(&conn);
+        conn.execute(
+            "INSERT INTO caldav_config(account_id,kind,base_url) VALUES (1,'google','https://g')",
+            [],
+        )
+        .unwrap();
+        run(&mut conn).unwrap();
+        let kind: String = conn
+            .query_row(
+                "SELECT kind FROM caldav_config WHERE account_id=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, "google");
+        conn.execute(
+            "UPDATE caldav_config SET kind='microsoft' WHERE account_id=1",
+            params![],
+        )
+        .unwrap();
     }
 
     #[test]
